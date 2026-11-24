@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تسجيل حضور الطلاب</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f4f6f8; }
+    h2 { color: #176b50; }
+    #reader { max-width: 450px; margin: 20px auto; }
+    #result { margin: 20px auto; padding: 18px; background: white; border-radius: 12px; font-size: 18px; max-width: 450px; }
+    button { padding: 15px 30px; font-size: 18px; border: none; border-radius: 10px; background: #176b50; color: white; }
+    .ok { background: #d9f5e5 !important; }
+    .warn { background: #fff3cd !important; }
+    .err { background: #f8d7da !important; }
+    #resetKey { display: block; margin: 30px auto 0; font-size: 13px; padding: 8px 14px; background: #888; }
+  </style>
+</head>
+<body>
+
+  <h2>تسجيل حضور الطلاب</h2>
+  <button id="startBtn" onclick="startScanner()">ابدئي المسح</button>
+  <div id="reader"></div>
+  <div id="result">في انتظار قراءة QR</div>
+  <button id="resetKey" onclick="resetKey()">تغيير الرمز السري</button>
+
+  <script>
+    const API_URL = "https://script.google.com/macros/s/AKfycbwYiLmxx1x_jXNdR-djJm5L4LqomsTrncTMxG3fY34-I1ZLWVxu-y9F8BC8AJAx53uLRw/exec";
+
+    let scanner = null;
+    let busy = false;
+    let counter = 0;
+
+    function getKey() {
+      let key = "";
+      try { key = localStorage.getItem("att_key") || ""; } catch (e) {}
+      if (!key) {
+        key = (prompt("اكتبي الرمز السري:") || "").trim();
+        if (key) { try { localStorage.setItem("att_key", key); } catch (e) {} }
+      }
+      return key;
+    }
+
+    function resetKey() {
+      try { localStorage.removeItem("att_key"); } catch (e) {}
+      alert("تم مسح الرمز. سيُطلب منكِ مرة أخرى عند المسح القادم.");
+    }
+
+    function show(text, cls) {
+      const r = document.getElementById("result");
+      r.innerText = text;
+      r.className = cls || "";
+    }
+
+    function classify(msg) {
+      if (msg.indexOf("تم تسجيل") === 0) return "ok";
+      if (msg.indexOf("مسجل بالفعل") !== -1) return "warn";
+      return "err";
+    }
+
+    // إرسال الاسم إلى Apps Script عبر JSONP
+    function sendAttendance(name, done) {
+      const key = getKey();
+      if (!key) { done("لم يتم إدخال الرمز السري"); return; }
+
+      const cbName = "cb_" + Date.now() + "_" + (counter++);
+      const script = document.createElement("script");
+      let finished = false;
+
+      function finish(msg) {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        delete window[cbName];
+        script.remove();
+        done(msg);
+      }
+
+      window[cbName] = function (data) {
+        const msg = data && data.message ? data.message : "رد غير مفهوم";
+        if (msg.indexOf("غير مصرح") === 0) { try { localStorage.removeItem("att_key"); } catch (e) {} }
+        finish(msg);
+      };
+
+      const timer = setTimeout(function () {
+        finish("انتهت المهلة، تأكدي من الإنترنت وحاولي مرة أخرى");
+      }, 20000);
+
+      script.onerror = function () { finish("تعذر الاتصال بالخادم"); };
+      script.src = API_URL +
+        "?key=" + encodeURIComponent(key) +
+        "&name=" + encodeURIComponent(name) +
+        "&callback=" + cbName;
+      document.body.appendChild(script);
+    }
+
+    function startScanner() {
+      if (scanner) return;
+      if (!getKey()) { show("لازم تدخلي الرمز السري أولًا", "err"); return; }
+
+      scanner = new Html5Qrcode("reader");
+
+      scanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: 250 },
+        function (decodedText) {
+          if (busy) return;
+          busy = true;
+          scanner.pause(true);
+          show("جاري تسجيل: " + decodedText);
+
+          sendAttendance(decodedText.trim(), function (msg) {
+            show(msg, classify(msg));
+            setTimeout(function () {
+              busy = false;
+              scanner.resume();
+            }, 1800);
+          });
+        }
+      ).then(function () {
+        document.getElementById("startBtn").style.display = "none";
+        show("الكاميرا تعمل. وجهيها إلى QR");
+      }).catch(function (error) {
+        show("تعذر تشغيل الكاميرا: " + error, "err");
+        scanner = null;
+      });
+    }
+  </script>
+</body>
+</html>
